@@ -18,11 +18,32 @@ Blog: https://www.tqdev.com/2026-tunnel-launcher-ssh-tray-gui/
 - In-window list with Add / Edit / Remove forms — no text editor required
 - SSH-style tunnel specification (`-L 9000:localhost:9000`, `-R …`, `-D …`)
 - Reads `~/.ssh/config` for HostName, User, Port, IdentityFile, ProxyJump
-- Auth via explicit identity, ssh-agent, or default identities
+- Auth via ssh-agent, explicit identity, or default identities
 - Per-tunnel **launch app**: start a GUI program when the tunnel opens; the
   tunnel auto-closes when that program exits
 - In-memory connection log viewable from a button
 - Single-instance via pidfile — second invocation re-shows the window
+
+## ssh-agent
+
+Keys held by a running ssh-agent are offered first, so a key you unlocked once
+with `ssh-add` never triggers a passphrase prompt. If the agent already holds
+the key that a tunnel is configured to use, the file on disk is left alone.
+
+On Linux and macOS the agent is found through `SSH_AUTH_SOCK`. On Windows there
+is no such variable: the OpenSSH agent service listens on the named pipe
+`\\.\pipe\openssh-ssh-agent`, which is used by default, and `SSH_AUTH_SOCK`
+still wins when set (to either a named pipe or a unix socket). To start the
+service and add a key:
+
+```powershell
+Get-Service ssh-agent | Set-Service -StartupType Automatic
+Start-Service ssh-agent
+ssh-add $env:USERPROFILE\.ssh\id_ed25519
+```
+
+The connection log (the Log button) lists every key the agent offers, which is
+the first place to look if a tunnel still asks for a passphrase.
 
 ## Configuration
 

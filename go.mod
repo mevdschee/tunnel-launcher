@@ -7,6 +7,7 @@ toolchain go1.24.6
 require (
 	fyne.io/fyne/v2 v2.5.4
 	github.com/BurntSushi/toml v1.6.0
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/kevinburke/ssh_config v1.6.0
 	github.com/mevdschee/pidfile v1.1.3
 	golang.org/x/crypto v0.47.0

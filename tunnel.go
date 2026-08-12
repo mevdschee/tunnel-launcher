@@ -3,8 +3,9 @@
 // Supports the three modes the GUI exposes: local forward (-L), remote
 // forward (-R), and dynamic local SOCKS5 (-D). SSH connection settings are
 // merged from the user's ~/.ssh/config (via kevinburke/ssh_config) with any
-// per-tunnel overrides taking precedence. Authentication tries an explicit
-// identity file, then ssh-agent, then the standard default identities.
+// per-tunnel overrides taking precedence. Authentication offers ssh-agent
+// keys first, then an explicit identity file or the standard default
+// identities — see sshagent.go for how the agent is reached.
 package main
 
 import (
@@ -21,7 +22,6 @@ import (
 
 	"github.com/kevinburke/ssh_config"
 	"golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/agent"
 )
 
 type Mode int
@@ -562,31 +562,27 @@ func buildAuth(r resolved, prompts CredentialPrompts, keyCache *signerCache, log
 	// (8.7+) refuses SHA-1 by default. OpenSSH CLI sends SHA2 hint flags
 	// to the agent; the Go agent client doesn't unless we force it via
 	// MultiAlgorithmSigner.
-	var ag agent.Agent
-	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
-		if conn, err := net.Dial("unix", sock); err == nil {
-			ag = agent.NewClient(conn)
-			// One-shot inventory log so the user can see what the agent
-			// actually offers — invaluable when "ssh works but tool fails".
-			if list, lerr := ag.List(); lerr != nil {
-				log("auth: ssh-agent list error: %v", lerr)
-			} else if len(list) == 0 {
-				log("auth: ssh-agent at %s has 0 keys", sock)
-			} else {
-				for i, k := range list {
-					log("auth: ssh-agent[%d] %s %s (%s)", i, k.Type(), ssh.FingerprintSHA256(k), k.Comment)
-				}
-			}
-		} else {
-			log("auth: ssh-agent unreachable: %v", err)
-		}
-	} else {
-		log("auth: SSH_AUTH_SOCK not set — no agent")
+	ag, agentKeys := sshAgent(log)
+	// One-shot inventory log so the user can see what the agent actually
+	// offers — invaluable when "ssh works but tool fails".
+	for i, k := range agentKeys {
+		log("auth: ssh-agent[%d] %s %s (%s)", i, k.Type(), ssh.FingerprintSHA256(k), k.Comment)
 	}
+	heldByAgent := agentFingerprints(agentKeys)
 
 	var fileSigners []ssh.Signer
 	tryKey := func(p string) {
 		if p == "" {
+			return
+		}
+		// The whole point of the agent is that an unlocked key stays
+		// unlocked. If it already holds this key there is nothing to gain
+		// from reading the file: it would either duplicate an offer the
+		// agent already makes (burning one of the server's MaxAuthTries) or,
+		// worse, pop a passphrase dialog for a key the user unlocked with
+		// ssh-add precisely so they'd never see that dialog again.
+		if pub, err := publicKeyOf(p); err == nil && heldByAgent[ssh.FingerprintSHA256(pub)] {
+			log("auth: %s is held by ssh-agent, letting the agent sign", p)
 			return
 		}
 		if keyCache != nil {
