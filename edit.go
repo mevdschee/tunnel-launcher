@@ -26,6 +26,7 @@ type tunnelEntry struct {
 	User          string `toml:"user,omitempty"`
 	Port          int    `toml:"port,omitempty"`
 	Identity      string `toml:"identity,omitempty"`
+	JumpHosts     string `toml:"jump_hosts,omitempty"`
 	KeepAlive     *int   `toml:"keep_alive,omitempty"`
 	App           string `toml:"app,omitempty"`
 	AutoReconnect bool   `toml:"auto_reconnect,omitempty"`
@@ -119,6 +120,7 @@ func (e tunnelEntry) toDesc(fileKeepAlive *int) (Desc, error) {
 		User:          e.User,
 		Port:          e.Port,
 		Identity:      e.Identity,
+		JumpHosts:     e.JumpHosts,
 		Mode:          m,
 		Local:         local,
 		Remote:        remote,

@@ -10,6 +10,8 @@ statically-linked executable per platform (Linux / macOS / Windows).
 
 ![Tunnel Launcher Main Window](main-window.png)
 
+Blog: https://www.tqdev.com/2026-tunnel-launcher-ssh-tray-gui/
+
 ## Features
 
 - Tray icon with per-tunnel status (open / closed) and click-to-toggle
