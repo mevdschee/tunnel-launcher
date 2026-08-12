@@ -60,6 +60,7 @@ type Desc struct {
 	User          string
 	Port          int
 	Identity      string
+	JumpHosts     string // comma-separated: "user@host:port,user@host2:port"
 	Mode          Mode
 	Local         string
 	Remote        string
@@ -437,7 +438,12 @@ func resolveHostLogged(d Desc, log logFn) resolved {
 			log("resolve: ssh_config IdentityFile lookup error: %v", err)
 		}
 	}
-	if pj := ssh_config.Get(d.Host, "ProxyJump"); pj != "" {
+	// Per-tunnel jump hosts override ssh_config ProxyJump.
+	if d.JumpHosts != "" {
+		for _, j := range strings.Split(d.JumpHosts, ",") {
+			r.jumps = append(r.jumps, parseJump(strings.TrimSpace(j)))
+		}
+	} else if pj := ssh_config.Get(d.Host, "ProxyJump"); pj != "" {
 		for _, j := range strings.Split(pj, ",") {
 			r.jumps = append(r.jumps, parseJump(strings.TrimSpace(j)))
 		}

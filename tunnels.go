@@ -63,8 +63,14 @@ func (m *tunnelManager) loggerFor(name string) logFn {
 }
 
 func (m *tunnelManager) open(d Desc) error {
+	return m.openInternal(d, false)
+}
+
+func (m *tunnelManager) openInternal(d Desc, isAutoReconnect bool) error {
 	// An explicit open cancels any pending reconnect for this name.
-	m.cancelPending(d.Name)
+	if !isAutoReconnect {
+		m.cancelPending(d.Name)
+	}
 
 	tlog := m.loggerFor(d.Name)
 
@@ -144,7 +150,7 @@ func (m *tunnelManager) scheduleReconnect(d Desc) {
 				return
 			case <-time.After(reconnectDelay):
 			}
-			if err := m.open(d); err != nil {
+			if err := m.openInternal(d, true); err != nil {
 				tlog("[%s] auto-reconnect failed: %v (retrying in %s)", d.Name, err, reconnectDelay)
 				continue
 			}
