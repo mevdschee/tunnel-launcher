@@ -486,7 +486,7 @@ func runGUI() {
 				modTime = stat.ModTime()
 				size = stat.Size()
 			}
-			
+
 			if modTime != lastConfigModTime || size != lastConfigSize || lastConfigModTime.IsZero() {
 				lastConfigModTime = modTime
 				lastConfigSize = size
@@ -499,14 +499,22 @@ func runGUI() {
 				}
 			}
 		}
-		
+
 		snap := mgr.snapshot()
 		st.setRunning(snap)
-		
+
 		if k := runKey(snap); k != lastRunKey {
 			lastRunKey = k
 			needsRefresh = true
 			rebuildTray()
+		}
+
+		// An open tunnel shows a live uptime, so its row needs redrawing on
+		// every tick even when neither the config nor the set of running
+		// tunnels changed. Without this the uptime stays at the value it had
+		// the moment the tunnel opened, i.e. 00m00s.
+		if anyOpen(snap) {
+			needsRefresh = true
 		}
 
 		if needsRefresh {
@@ -881,6 +889,17 @@ func (s *state) appFor(name string) (string, bool) {
 
 func displayName(t *Desc) string {
 	return t.Name
+}
+
+// anyOpen reports whether any tunnel in snap is connected. An open tunnel
+// shows a ticking uptime, so its row has to be redrawn on every refresh.
+func anyOpen(snap map[string]Desc) bool {
+	for _, d := range snap {
+		if d.Status == StatusOpen {
+			return true
+		}
+	}
+	return false
 }
 
 func statusGlyph(t *Desc) string {

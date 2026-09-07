@@ -35,6 +35,20 @@ func TestStatusGlyph(t *testing.T) {
 	}
 }
 
+func TestAnyOpen(t *testing.T) {
+	if anyOpen(nil) {
+		t.Error("empty snapshot got true")
+	}
+	closed := map[string]Desc{"a": {Status: StatusClosed}, "b": {Status: StatusClosed}}
+	if anyOpen(closed) {
+		t.Error("all closed got true")
+	}
+	mixed := map[string]Desc{"a": {Status: StatusClosed}, "b": {Status: StatusOpen}}
+	if !anyOpen(mixed) {
+		t.Error("one open got false")
+	}
+}
+
 func TestUptimeText_Closed(t *testing.T) {
 	if got := uptimeText(&Desc{Status: StatusClosed}); got != "" {
 		t.Errorf("got %q, want empty string for closed tunnel", got)
