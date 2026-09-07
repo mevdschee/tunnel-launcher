@@ -38,7 +38,7 @@ func sshAgent(log logFn) (agent.Agent, []*agent.Key) {
 
 	addr := agentAddress()
 	if addr == "" {
-		log("auth: no ssh-agent configured (SSH_AUTH_SOCK not set)")
+		log.infof("auth: no ssh-agent configured (SSH_AUTH_SOCK not set)")
 		closeAgentLocked()
 		return nil, nil
 	}
@@ -47,24 +47,24 @@ func sshAgent(log logFn) (agent.Agent, []*agent.Key) {
 		if keys, err := agentClient.List(); err == nil {
 			return agentClient, keys
 		}
-		log("auth: ssh-agent connection went stale, redialing %s", addr)
+		log.infof("auth: ssh-agent connection went stale, redialing %s", addr)
 	}
 	closeAgentLocked()
 
 	conn, err := dialAgentConn(addr)
 	if err != nil {
-		log("auth: ssh-agent at %s unreachable: %v", addr, err)
+		log.warnf("auth: ssh-agent at %s unreachable: %v", addr, err)
 		return nil, nil
 	}
 	cli := agent.NewClient(conn)
 	keys, err := cli.List()
 	if err != nil {
-		log("auth: ssh-agent at %s list error: %v", addr, err)
+		log.warnf("auth: ssh-agent at %s list error: %v", addr, err)
 		conn.Close()
 		return nil, nil
 	}
 	agentConn, agentClient, agentAddr = conn, cli, addr
-	log("auth: ssh-agent at %s holds %d key(s)", addr, len(keys))
+	log.infof("auth: ssh-agent at %s holds %d key(s)", addr, len(keys))
 	return cli, keys
 }
 

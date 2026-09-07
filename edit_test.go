@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -214,6 +215,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	override := 30
 	tf := &tunnelsFile{
 		KeepAlive: &ka,
+		LogLevel:  "debug",
 		Tunnels: []tunnelEntry{
 			{Name: "a", Host: "h1", Forward: "-L 9000:localhost:9000"},
 			{Name: "b", Host: "h2", Forward: "-D 1080", KeepAlive: &override, App: "code ."},
@@ -238,6 +240,18 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, tf) {
 		t.Fatalf("round-trip mismatch:\n got:  %+v\n want: %+v", got, tf)
+	}
+
+	// File-level keys must be written before the [[tunnels]] tables — TOML
+	// would otherwise read them back as fields of the last tunnel.
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	for _, key := range []string{"keep_alive", "log_level"} {
+		if i, j := bytes.Index(raw, []byte(key)), bytes.Index(raw, []byte("[[tunnels]]")); i < 0 || i > j {
+			t.Errorf("%s at %d, want before [[tunnels]] at %d:\n%s", key, i, j, raw)
+		}
 	}
 }
 

@@ -277,3 +277,42 @@ func TestState_EntryOutOfRange(t *testing.T) {
 		t.Error("negative idx should return false")
 	}
 }
+
+func TestApplyConfigLogLevel(t *testing.T) {
+	cases := []struct {
+		name   string
+		start  Level
+		pinned bool
+		file   string
+		want   Level
+	}{
+		{name: "adopts the configured level", start: LevelInfo, file: "debug", want: LevelDebug},
+		{name: "unset falls back to the default", start: LevelDebug, file: "", want: defaultLevel},
+		{name: "unparsable value is left alone", start: LevelWarn, file: "chatty", want: LevelWarn},
+		{name: "-log-level outranks the file", start: LevelWarn, pinned: true, file: "debug", want: LevelWarn},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withLevel(t, tc.start)
+			prevPin := levelPinned.Load()
+			levelPinned.Store(tc.pinned)
+			t.Cleanup(func() { levelPinned.Store(prevPin) })
+
+			applyConfigLogLevel(&tunnelsFile{LogLevel: tc.file})
+			if got := logLevel(); got != tc.want {
+				t.Errorf("level = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A level picked in the log window is written back to the config, so a
+// reload of that same file does not undo the choice.
+func TestState_SetConfigLogLevelSurvivesSnapshot(t *testing.T) {
+	s := mkState(tunnelEntry{Name: "a", Forward: "-D 1080"})
+	s.setConfigLogLevel(LevelDebug)
+
+	if got := s.snapshotFile().LogLevel; got != "debug" {
+		t.Errorf("snapshot log_level = %q, want %q", got, "debug")
+	}
+}

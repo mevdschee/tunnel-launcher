@@ -71,8 +71,6 @@ type Desc struct {
 	LastConn time.Time
 }
 
-type logFn func(format string, a ...any)
-
 // Tunnel is the live, runnable instance of a Desc.
 type Tunnel struct {
 	Desc     Desc
@@ -122,11 +120,11 @@ func (t *Tunnel) Closed() <-chan struct{} { return t.closed }
 
 func (t *Tunnel) Open() error {
 	prefix := "[" + t.Desc.Name + "] "
-	tagged := func(format string, args ...any) {
+	tagged := logFn(func(format string, args ...any) {
 		t.log(prefix+format, args...)
-	}
+	})
 	r := resolveHostLogged(t.Desc, tagged)
-	tagged("connecting to %s@%s:%d (mode=%s)", r.user, r.host, r.port, t.Desc.Mode)
+	tagged.infof("connecting to %s@%s:%d (mode=%s)", r.user, r.host, r.port, t.Desc.Mode)
 
 	cli, err := dialChain(r, t.prompts, t.keyCache, t.hostKeyCB, tagged)
 	if err != nil {
@@ -135,7 +133,7 @@ func (t *Tunnel) Open() error {
 	t.mu.Lock()
 	t.client = cli
 	t.mu.Unlock()
-	t.log("[%s] ssh connection established", t.Desc.Name)
+	t.log.infof("[%s] ssh connection established", t.Desc.Name)
 
 	if err := t.startMode(); err != nil {
 		cli.Close()
@@ -184,9 +182,9 @@ func (t *Tunnel) run() {
 
 	select {
 	case <-t.stop:
-		t.log("[%s] stop signal received", t.Desc.Name)
+		t.log.infof("[%s] stop signal received", t.Desc.Name)
 	case <-disconn:
-		t.log("[%s] disconnected", t.Desc.Name)
+		t.log.warnf("[%s] disconnected", t.Desc.Name)
 	}
 
 	t.mu.Lock()
@@ -218,7 +216,7 @@ func (t *Tunnel) runKeepAlive(cancel <-chan struct{}) {
 		case <-tick.C:
 			_, _, err := t.client.SendRequest("keepalive@openssh.com", true, nil)
 			if err != nil {
-				t.log("[%s] keepalive failed: %v", t.Desc.Name, err)
+				t.log.warnf("[%s] keepalive failed: %v", t.Desc.Name, err)
 				t.client.Close()
 				return
 			}
@@ -245,7 +243,7 @@ func (t *Tunnel) startLocal() error {
 		return fmt.Errorf("listen %s: %v", la, err)
 	}
 	t.listener = ln
-	t.log("[%s] listening on %s, forwarding to %s", t.Desc.Name, la, t.Desc.Remote)
+	t.log.infof("[%s] listening on %s, forwarding to %s", t.Desc.Name, la, t.Desc.Remote)
 	go t.acceptLocal(ln)
 	return nil
 }
@@ -261,11 +259,11 @@ func (t *Tunnel) acceptLocal(ln net.Listener) {
 			ra := parseAddr(t.Desc.Remote)
 			up, err := t.client.Dial(ra.network, ra.address)
 			if err != nil {
-				t.log("[%s] dial %s: %v", t.Desc.Name, ra, err)
+				t.log.warnf("[%s] dial %s: %v", t.Desc.Name, ra, err)
 				return
 			}
 			defer up.Close()
-			t.log("[%s] forward %s ↔ %s", t.Desc.Name, c.RemoteAddr(), ra)
+			t.log.debugf("[%s] forward %s ↔ %s", t.Desc.Name, c.RemoteAddr(), ra)
 			pipe(c, up)
 		}(c)
 	}
@@ -278,7 +276,7 @@ func (t *Tunnel) startRemote() error {
 		return fmt.Errorf("remote listen %s: %v", ra, err)
 	}
 	t.listener = ln
-	t.log("[%s] remote listening on %s, forwarding to %s", t.Desc.Name, ra, t.Desc.Local)
+	t.log.infof("[%s] remote listening on %s, forwarding to %s", t.Desc.Name, ra, t.Desc.Local)
 	go t.acceptRemote(ln)
 	return nil
 }
@@ -294,11 +292,11 @@ func (t *Tunnel) acceptRemote(ln net.Listener) {
 			la := parseAddr(t.Desc.Local)
 			down, err := net.Dial(la.network, la.address)
 			if err != nil {
-				t.log("[%s] dial %s: %v", t.Desc.Name, la, err)
+				t.log.warnf("[%s] dial %s: %v", t.Desc.Name, la, err)
 				return
 			}
 			defer down.Close()
-			t.log("[%s] reverse %s ↔ %s", t.Desc.Name, c.RemoteAddr(), la)
+			t.log.debugf("[%s] reverse %s ↔ %s", t.Desc.Name, c.RemoteAddr(), la)
 			pipe(c, down)
 		}(c)
 	}
@@ -311,7 +309,7 @@ func (t *Tunnel) startSocks() error {
 		return fmt.Errorf("listen %s: %v", la, err)
 	}
 	t.listener = ln
-	t.log("[%s] SOCKS5 listening on %s", t.Desc.Name, la)
+	t.log.infof("[%s] SOCKS5 listening on %s", t.Desc.Name, la)
 	go t.acceptSocks(ln)
 	return nil
 }
@@ -326,18 +324,18 @@ func (t *Tunnel) acceptSocks(ln net.Listener) {
 			defer c.Close()
 			target, err := socksHandshake(c)
 			if err != nil {
-				t.log("[%s] socks handshake: %v", t.Desc.Name, err)
+				t.log.warnf("[%s] socks handshake: %v", t.Desc.Name, err)
 				return
 			}
 			up, err := t.client.Dial("tcp", target)
 			if err != nil {
 				socksReply(c, 0x05) // connection refused
-				t.log("[%s] socks dial %s: %v", t.Desc.Name, target, err)
+				t.log.warnf("[%s] socks dial %s: %v", t.Desc.Name, target, err)
 				return
 			}
 			defer up.Close()
 			socksReply(c, 0x00)
-			t.log("[%s] socks %s ↔ %s", t.Desc.Name, c.RemoteAddr(), target)
+			t.log.debugf("[%s] socks %s ↔ %s", t.Desc.Name, c.RemoteAddr(), target)
 			pipe(c, up)
 		}(c)
 	}
@@ -393,9 +391,6 @@ func resolveHost(d Desc) resolved {
 }
 
 func resolveHostLogged(d Desc, log logFn) resolved {
-	if log == nil {
-		log = func(string, ...any) {}
-	}
 	r := resolved{}
 	r.host = ssh_config.Get(d.Host, "HostName")
 	if r.host == "" {
@@ -419,7 +414,7 @@ func resolveHostLogged(d Desc, log logFn) resolved {
 	}
 	r.identity = expandTilde(d.Identity)
 	if r.identity != "" {
-		log("resolve: identity from tunnel config: %s", r.identity)
+		log.infof("resolve: identity from tunnel config: %s", r.identity)
 	} else {
 		// kevinburke/ssh_config returns only the FIRST IdentityFile entry
 		// from ssh_config; OpenSSH would try every match. If your "right"
@@ -430,12 +425,12 @@ func resolveHostLogged(d Desc, log logFn) resolved {
 			candidate := expandTilde(id)
 			if _, e := os.Stat(candidate); e == nil {
 				r.identity = candidate
-				log("resolve: identity from ssh_config: %s", r.identity)
+				log.infof("resolve: identity from ssh_config: %s", r.identity)
 			} else {
-				log("resolve: ssh_config IdentityFile %s missing on disk: %v", candidate, e)
+				log.warnf("resolve: ssh_config IdentityFile %s missing on disk: %v", candidate, e)
 			}
 		} else if err != nil {
-			log("resolve: ssh_config IdentityFile lookup error: %v", err)
+			log.warnf("resolve: ssh_config IdentityFile lookup error: %v", err)
 		}
 	}
 	// Per-tunnel jump hosts override ssh_config ProxyJump.
@@ -480,7 +475,7 @@ func dialChain(r resolved, prompts CredentialPrompts, keyCache *signerCache, hos
 		HostKeyCallback: hostKeyCB,
 		Timeout:         15 * time.Second,
 		BannerCallback: func(msg string) error {
-			log("banner: %s", strings.TrimRight(msg, "\r\n"))
+			log.infof("banner: %s", strings.TrimRight(msg, "\r\n"))
 			return nil
 		},
 	}
@@ -566,7 +561,7 @@ func buildAuth(r resolved, prompts CredentialPrompts, keyCache *signerCache, log
 	// One-shot inventory log so the user can see what the agent actually
 	// offers — invaluable when "ssh works but tool fails".
 	for i, k := range agentKeys {
-		log("auth: ssh-agent[%d] %s %s (%s)", i, k.Type(), ssh.FingerprintSHA256(k), k.Comment)
+		log.infof("auth: ssh-agent[%d] %s %s (%s)", i, k.Type(), ssh.FingerprintSHA256(k), k.Comment)
 	}
 	heldByAgent := agentFingerprints(agentKeys)
 
@@ -582,20 +577,20 @@ func buildAuth(r resolved, prompts CredentialPrompts, keyCache *signerCache, log
 		// worse, pop a passphrase dialog for a key the user unlocked with
 		// ssh-add precisely so they'd never see that dialog again.
 		if pub, err := publicKeyOf(p); err == nil && heldByAgent[ssh.FingerprintSHA256(pub)] {
-			log("auth: %s is held by ssh-agent, letting the agent sign", p)
+			log.infof("auth: %s is held by ssh-agent, letting the agent sign", p)
 			return
 		}
 		if keyCache != nil {
 			if s, ok := keyCache.get(p); ok {
 				fileSigners = append(fileSigners, s)
-				log("auth: cached identity %s", p)
+				log.infof("auth: cached identity %s", p)
 				return
 			}
 		}
 		signer, err := loadKeyInteractive(p, prompts, log)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				log("auth: skip %s: %v", p, err)
+				log.warnf("auth: skip %s: %v", p, err)
 			}
 			return
 		}
@@ -607,19 +602,19 @@ func buildAuth(r resolved, prompts CredentialPrompts, keyCache *signerCache, log
 			keyCache.put(p, signer)
 		}
 		fileSigners = append(fileSigners, signer)
-		log("auth: identity %s %s %s", p, signer.PublicKey().Type(), ssh.FingerprintSHA256(signer.PublicKey()))
+		log.infof("auth: identity %s %s %s", p, signer.PublicKey().Type(), ssh.FingerprintSHA256(signer.PublicKey()))
 	}
 
 	if r.identity != "" {
-		log("auth: configured identity %s", r.identity)
+		log.infof("auth: configured identity %s", r.identity)
 		tryKey(r.identity)
 	} else if home, err := os.UserHomeDir(); err == nil {
-		log("auth: trying default keys in %s/.ssh", home)
+		log.infof("auth: trying default keys in %s/.ssh", home)
 		for _, name := range []string{"id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"} {
 			tryKey(filepath.Join(home, ".ssh", name))
 		}
 	} else {
-		log("auth: no home dir: %v", err)
+		log.warnf("auth: no home dir: %v", err)
 	}
 
 	// Combine agent + file signers into ONE publickey AuthMethod. Splitting
@@ -634,7 +629,7 @@ func buildAuth(r resolved, prompts CredentialPrompts, keyCache *signerCache, log
 			if ag != nil {
 				ags, err := ag.Signers()
 				if err != nil {
-					log("auth: ssh-agent signers error: %v", err)
+					log.warnf("auth: ssh-agent signers error: %v", err)
 				} else {
 					for _, s := range ags {
 						sigs = append(sigs, preferRSASHA2(s))
@@ -682,7 +677,7 @@ func loadKeyInteractive(path string, prompts CredentialPrompts, log logFn) (ssh.
 	}
 	pass, ok := prompts.Passphrase(path)
 	if !ok {
-		log("auth: passphrase prompt cancelled for %s", path)
+		log.warnf("auth: passphrase prompt cancelled for %s", path)
 		return nil, nil
 	}
 	signer, perr := ssh.ParsePrivateKeyWithPassphrase(data, []byte(pass))

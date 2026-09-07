@@ -21,7 +21,7 @@ Blog: https://www.tqdev.com/2026-tunnel-launcher-ssh-tray-gui/
 - Auth via ssh-agent, explicit identity, or default identities
 - Per-tunnel **launch app**: start a GUI program when the tunnel opens; the
   tunnel auto-closes when that program exits
-- In-memory connection log viewable from a button
+- In-memory connection log viewable from a button, with a level selector
 - Single-instance via pidfile — second invocation re-shows the window
 
 ## ssh-agent
@@ -54,6 +54,8 @@ Default location:
 - Override with `$TUNNEL_LAUNCHER_CONFIG`
 
 ```toml
+log_level = "info"                    # optional: error, warn, info or debug
+
 [[tunnels]]
 name    = "dev"
 host    = "dev-server"                # ssh alias or hostname
@@ -63,6 +65,33 @@ port    = 22                          # optional
 identity = "~/.ssh/id_dev"            # optional
 keep_alive = 120                      # optional, seconds; 0 to disable
 app     = "code ."                    # optional, GUI app to launch
+```
+
+## Logging
+
+Four levels, each showing everything above it:
+
+| Level   | Shows                                                           |
+| ------- | --------------------------------------------------------------- |
+| `error` | a tunnel that would not open or close, a config file that would not load |
+| `warn`  | a key that would not parse, an unreachable agent, an unexpected disconnect |
+| `info`  | the connection lifecycle: resolve, auth, connect, listen, stop (default) |
+| `debug` | one line per forwarded connection, on top of all of the above    |
+
+The default is `info`, which is a handful of lines per tunnel. Pick `debug`
+when a connection misbehaves and you want to see the individual forwards; it
+scales with what the tunnel carries, so it is not what you want left on. The
+log window keeps the last 2000 lines per tunnel, and messages below the
+current level are dropped before they reach it, so debug traffic can never
+push the connection log out of view.
+
+The level is app-wide. Set it in the log window (the selector next to Clear,
+which writes the choice to `log_level` in the config), in the config file, or
+on the command line:
+
+```sh
+./tunnel-launcher -log-level debug   # wins over the config for this run
+./tunnel-launcher -v                 # also stream the log to stdout
 ```
 
 ## Build
