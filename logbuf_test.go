@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -120,4 +122,123 @@ func TestLogBuffer_OnAddCanCallSnapshot(t *testing.T) {
 	if got := <-done; got != 1 {
 		t.Errorf("snapshot inside onAdd got len %d, want 1", got)
 	}
+}
+
+func TestParseLevel(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want Level
+	}{
+		{"error", LevelError},
+		{"warn", LevelWarn},
+		{"warning", LevelWarn},
+		{"info", LevelInfo},
+		{"debug", LevelDebug},
+		{"  DEBUG  ", LevelDebug},
+	} {
+		got, err := parseLevel(tc.in)
+		if err != nil {
+			t.Errorf("parseLevel(%q) = error %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("parseLevel(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+		if rt := got.String(); rt != tc.want.String() {
+			t.Errorf("parseLevel(%q).String() = %q, want %q", tc.in, rt, tc.want.String())
+		}
+	}
+}
+
+func TestParseLevel_Unknown(t *testing.T) {
+	got, err := parseLevel("chatty")
+	if err == nil {
+		t.Fatalf("parseLevel(chatty) = %v, want error", got)
+	}
+	if got != defaultLevel {
+		t.Errorf("level on error = %v, want the default %v", got, defaultLevel)
+	}
+}
+
+// withLevel sets the process-wide level for one test and restores it after.
+func withLevel(t *testing.T, l Level) {
+	t.Helper()
+	prev := logLevel()
+	setLogLevel(l)
+	t.Cleanup(func() { setLogLevel(prev) })
+}
+
+// The default must keep the connection lifecycle and drop the
+// per-connection forwarding chatter.
+func TestLogLevel_DefaultKeepsInfoDropsDebug(t *testing.T) {
+	withLevel(t, defaultLevel)
+	var got []string
+	log := logFn(func(format string, a ...any) {
+		got = append(got, fmt.Sprintf(format, a...))
+	})
+
+	log.errorf("open failed")
+	log.warnf("disconnected")
+	log.infof("ssh connection established")
+	log.debugf("forward 127.0.0.1:61369 ↔ 127.0.0.1:1080")
+
+	want := []string{"open failed", "disconnected", "ssh connection established"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("lines = %q, want %q", got, want)
+	}
+}
+
+func TestLogLevel_Thresholds(t *testing.T) {
+	for _, tc := range []struct {
+		level Level
+		want  []string
+	}{
+		{LevelError, []string{"e"}},
+		{LevelWarn, []string{"e", "w"}},
+		{LevelInfo, []string{"e", "w", "i"}},
+		{LevelDebug, []string{"e", "w", "i", "d"}},
+	} {
+		withLevel(t, tc.level)
+		var got []string
+		log := logFn(func(format string, a ...any) { got = append(got, format) })
+		log.errorf("e")
+		log.warnf("w")
+		log.infof("i")
+		log.debugf("d")
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("at %v: lines = %q, want %q", tc.level, got, tc.want)
+		}
+	}
+}
+
+// Filtering happens before the sink, so debug traffic can't evict the
+// connection log from a tunnel's ring buffer.
+func TestLogLevel_FiltersBeforeBuffer(t *testing.T) {
+	withLevel(t, LevelInfo)
+	b := newLogBuffer(10)
+	log := logFn(b.Log)
+
+	log.infof("ssh connection established")
+	for i := 0; i < 50; i++ {
+		log.debugf("forward %d", i)
+	}
+
+	lines := b.Snapshot()
+	if len(lines) != 1 {
+		t.Fatalf("buffered %d lines, want 1: %q", len(lines), lines)
+	}
+	if !strings.HasSuffix(lines[0], "ssh connection established") {
+		t.Errorf("kept line = %q", lines[0])
+	}
+}
+
+// A nil sink is the "no logger" case (resolveHost calls through it), and
+// must not panic at any level.
+func TestLogLevel_NilLoggerIsSafe(t *testing.T) {
+	withLevel(t, LevelDebug)
+	var log logFn
+	log.errorf("e")
+	log.warnf("w")
+	log.infof("i")
+	log.debugf("d")
 }

@@ -1,9 +1,15 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/test"
+	"fyne.io/fyne/v2/widget"
 )
 
 func TestTruncate(t *testing.T) {
@@ -275,5 +281,118 @@ func TestState_EntryOutOfRange(t *testing.T) {
 	}
 	if _, ok := s.entry(-1); ok {
 		t.Error("negative idx should return false")
+	}
+}
+
+func TestApplyConfigLogLevel(t *testing.T) {
+	cases := []struct {
+		name   string
+		start  Level
+		pinned bool
+		file   string
+		want   Level
+	}{
+		{name: "adopts the configured level", start: LevelInfo, file: "debug", want: LevelDebug},
+		{name: "unset falls back to the default", start: LevelDebug, file: "", want: defaultLevel},
+		{name: "unparsable value is left alone", start: LevelWarn, file: "chatty", want: LevelWarn},
+		{name: "-log-level outranks the file", start: LevelWarn, pinned: true, file: "debug", want: LevelWarn},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			withLevel(t, tc.start)
+			prevPin := levelPinned.Load()
+			levelPinned.Store(tc.pinned)
+			t.Cleanup(func() { levelPinned.Store(prevPin) })
+
+			applyConfigLogLevel(&tunnelsFile{LogLevel: tc.file})
+			if got := logLevel(); got != tc.want {
+				t.Errorf("level = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// A level picked in the log window is written back to the config, so a
+// reload of that same file does not undo the choice.
+func TestState_SetConfigLogLevelSurvivesSnapshot(t *testing.T) {
+	s := mkState(tunnelEntry{Name: "a", Forward: "-D 1080"})
+	s.setConfigLogLevel(LevelDebug)
+
+	if got := s.snapshotFile().LogLevel; got != "debug" {
+		t.Errorf("snapshot log_level = %q, want %q", got, "debug")
+	}
+}
+
+// findLevelSelect walks a widget tree looking for the log window's level
+// picker.
+func findLevelSelect(o fyne.CanvasObject) *widget.Select {
+	switch v := o.(type) {
+	case *widget.Select:
+		return v
+	case *fyne.Container:
+		for _, c := range v.Objects {
+			if s := findLevelSelect(c); s != nil {
+				return s
+			}
+		}
+	case *container.Scroll:
+		return findLevelSelect(v.Content)
+	}
+	return nil
+}
+
+// A log buffer outlives the window showing it, so a closed window must not
+// stay reachable through the buffer's onAdd callback.
+func TestShowLogWindow_ReleasesBufferOnClose(t *testing.T) {
+	withLevel(t, LevelInfo)
+	a := test.NewApp()
+	buf := newLogBuffer(10)
+
+	var picked []Level
+	showLogWindow(a, buf, "proxy", func(l Level) { picked = append(picked, l) })
+
+	buf.mu.Lock()
+	subscribed := buf.onAdd != nil
+	buf.mu.Unlock()
+	if !subscribed {
+		t.Fatal("open window did not subscribe to the buffer")
+	}
+
+	// Fyne fires OnChanged from SetSelected, so a window that wires the
+	// callback too early would re-save the config on every open.
+	if len(picked) != 0 {
+		t.Errorf("opening the window reported level changes %v, want none", picked)
+	}
+
+	var win fyne.Window
+	for _, w := range a.Driver().AllWindows() {
+		win = w
+	}
+	if win == nil {
+		t.Fatal("no window was opened")
+	}
+
+	sel := findLevelSelect(win.Content())
+	if sel == nil {
+		t.Fatal("level picker not found in the log window")
+	}
+	if sel.Selected != logLevel().String() {
+		t.Errorf("picker shows %q, want the active level %q", sel.Selected, logLevel().String())
+	}
+	if !reflect.DeepEqual(sel.Options, levelNames) {
+		t.Errorf("picker options = %v, want %v", sel.Options, levelNames)
+	}
+
+	sel.SetSelected("debug")
+	if len(picked) != 1 || picked[0] != LevelDebug {
+		t.Errorf("picking debug reported %v, want [debug]", picked)
+	}
+
+	win.Close()
+	buf.mu.Lock()
+	stillSubscribed := buf.onAdd != nil
+	buf.mu.Unlock()
+	if stillSubscribed {
+		t.Error("closed window is still reachable from the buffer's onAdd callback")
 	}
 }
