@@ -33,8 +33,14 @@ type tunnelEntry struct {
 }
 
 // tunnelsFile is the editable representation of the entire config file.
+//
+// LogLevel is "error", "warn", "info" or "debug"; empty means the built-in
+// default. Scalar keys must stay ahead of Tunnels here, or the encoder
+// writes them after the [[tunnels]] tables, where TOML would read them
+// back as belonging to the last tunnel.
 type tunnelsFile struct {
 	KeepAlive *int          `toml:"keep_alive,omitempty"`
+	LogLevel  string        `toml:"log_level,omitempty"`
 	Tunnels   []tunnelEntry `toml:"tunnels"`
 }
 

@@ -65,7 +65,17 @@ func init() {
 
 func main() {
 	flag.BoolVar(&verbose, "v", false, "verbose: stream all log output to stdout")
+	lvl := flag.String("log-level", "", "log level: error, warn, info or debug (default info; wins over the config file)")
 	flag.Parse()
+	if *lvl != "" {
+		l, err := parseLevel(*lvl)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		setLogLevel(l)
+		levelPinned.Store(true)
+	}
 	runGUI()
 }
 
@@ -90,7 +100,7 @@ func runGUI() {
 		return
 	}
 
-	appLog("tunnel-launcher %s starting", Version)
+	appLog.infof("tunnel-launcher %s starting", Version)
 
 	prompts := newGUIPrompts(a, w)
 	hke, err := newHostKeyEnforcer(prompts)
@@ -114,6 +124,7 @@ func runGUI() {
 		showEditDlg   func(idx int)
 		applyEdits    func() error
 		leaveEditMode func()
+		pickLevel     func(Level)
 		list          *widget.List
 	)
 
@@ -248,7 +259,7 @@ func runGUI() {
 				toggleB.SetIcon(theme.MediaPlayIcon())
 			}
 			toggleB.OnTapped = func() { toggleTun(t) }
-			logB.OnTapped = func() { showLogWindow(a, mgr.bufferFor(t.Name), t.Name) }
+			logB.OnTapped = func() { showLogWindow(a, mgr.bufferFor(t.Name), t.Name, pickLevel) }
 		},
 	)
 
@@ -316,7 +327,7 @@ func runGUI() {
 	// Action implementations.
 	openTun = func(t *Desc, fromTray bool) {
 		if err := mgr.open(*t); err != nil {
-			mgr.loggerFor(t.Name)("[%s] open failed: %v", t.Name, err)
+			mgr.loggerFor(t.Name).errorf("[%s] open failed: %v", t.Name, err)
 			if isHostKeyMismatch(err) {
 				// The host-key callback already opened a popup; don't double-show.
 				return
@@ -340,7 +351,7 @@ func runGUI() {
 	closeTun = func(name string) {
 		apps.kill(name)
 		if err := mgr.close(name); err != nil {
-			mgr.loggerFor(name)("[%s] close failed: %v", name, err)
+			mgr.loggerFor(name).errorf("[%s] close failed: %v", name, err)
 			dialog.ShowError(fmt.Errorf("close %s: %v", name, err), w)
 			return
 		}
@@ -360,7 +371,7 @@ func runGUI() {
 			}
 		}
 		err := apps.start(t.Name, cmd, func(_ error) {
-			mgr.loggerFor(t.Name)("[%s] launched app exited; closing tunnel", t.Name)
+			mgr.loggerFor(t.Name).infof("[%s] launched app exited; closing tunnel", t.Name)
 			_ = mgr.close(t.Name)
 			refresh()
 		})
@@ -368,7 +379,7 @@ func runGUI() {
 			dialog.ShowError(err, w)
 			return
 		}
-		mgr.loggerFor(t.Name)("[%s] launched: %s", t.Name, cmd)
+		mgr.loggerFor(t.Name).infof("[%s] launched: %s", t.Name, cmd)
 		refresh()
 	}
 	toggleTun = func(t *Desc) {
@@ -417,6 +428,18 @@ func runGUI() {
 			seen[t.Name] = true
 		}
 		return saveTunnelsFile(tf)
+	}
+
+	// pickLevel applies a level chosen in the log window and writes it to
+	// the config, so it survives a restart and the next config reload. An
+	// explicit choice also releases the -log-level pin.
+	pickLevel = func(l Level) {
+		setLogLevel(l)
+		levelPinned.Store(false)
+		st.setConfigLogLevel(l)
+		if err := applyEdits(); err != nil {
+			dialog.ShowError(err, w)
+		}
 	}
 
 	// Tray rebuild — called on startup and on window-close.
@@ -492,9 +515,10 @@ func runGUI() {
 				lastConfigSize = size
 				tf, err := loadTunnelsFile()
 				if err != nil {
-					appLog("config error: %v", err)
+					appLog.errorf("config error: %v", err)
 				} else {
 					st.setFile(tf)
+					applyConfigLogLevel(tf)
 					needsRefresh = true
 				}
 			}
@@ -655,9 +679,30 @@ func showTunnelForm(parent fyne.Window, entry tunnelEntry, defaultKeepAlive int,
 	d.Show()
 }
 
+// applyConfigLogLevel adopts the level named in the config file, or the
+// built-in default when the file names none. Does nothing while -log-level
+// holds the level for this session.
+func applyConfigLogLevel(tf *tunnelsFile) {
+	if levelPinned.Load() {
+		return
+	}
+	if tf.LogLevel == "" {
+		setLogLevel(defaultLevel)
+		return
+	}
+	l, err := parseLevel(tf.LogLevel)
+	if err != nil {
+		appLog.errorf("config: %v", err)
+		return
+	}
+	setLogLevel(l)
+}
+
 // showLogWindow opens a separate window streaming a per-tunnel log buffer.
 // name is shown in the title; the buffer's contents are rendered as-is.
-func showLogWindow(a fyne.App, buf *logBuffer, name string) {
+// onLevel receives the level picked in the window — it is app-wide, not
+// per-tunnel, since one threshold governs every buffer.
+func showLogWindow(a fyne.App, buf *logBuffer, name string, onLevel func(Level)) {
 	title := "tunnel-launcher — log"
 	if name != "" {
 		title += ": " + name
@@ -672,6 +717,19 @@ func showLogWindow(a fyne.App, buf *logBuffer, name string) {
 	entry := widget.NewMultiLineEntry()
 	entry.Wrapping = fyne.TextWrapOff
 	entry.SetText(render())
+
+	// Assign OnChanged after SetSelected: Fyne fires the callback from
+	// SetSelected, which would re-save the level every time a log window
+	// opens.
+	levelSel := widget.NewSelect(levelNames, nil)
+	levelSel.SetSelected(logLevel().String())
+	levelSel.OnChanged = func(s string) {
+		l, err := parseLevel(s)
+		if err != nil || onLevel == nil {
+			return
+		}
+		onLevel(l)
+	}
 
 	// Clearing the buffer fires onAdd, which repaints the entry, so the
 	// button doesn't touch the widget itself.
@@ -718,7 +776,7 @@ func showLogWindow(a fyne.App, buf *logBuffer, name string) {
 		})
 	})
 
-	bar := container.NewHBox(clearBtn, closeBtn)
+	bar := container.NewHBox(widget.NewLabel("Level"), levelSel, clearBtn, closeBtn)
 	w.SetContent(container.NewBorder(nil, bar, nil, nil, container.NewScroll(entry)))
 	w.Show()
 }
@@ -753,6 +811,14 @@ func (s *state) fileKeepAliveDefault() int {
 	return defaultKeepAliveSeconds
 }
 
+// setConfigLogLevel records the level in the editable file, so the next
+// save writes it out.
+func (s *state) setConfigLogLevel(l Level) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tf.LogLevel = l.String()
+}
+
 func (s *state) setRunning(r map[string]Desc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -762,7 +828,7 @@ func (s *state) setRunning(r map[string]Desc) {
 func (s *state) snapshotFile() *tunnelsFile {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := &tunnelsFile{KeepAlive: s.tf.KeepAlive}
+	out := &tunnelsFile{KeepAlive: s.tf.KeepAlive, LogLevel: s.tf.LogLevel}
 	out.Tunnels = append(out.Tunnels, s.tf.Tunnels...)
 	return out
 }

@@ -53,7 +53,8 @@ func (m *tunnelManager) bufferFor(name string) *logBuffer {
 
 // loggerFor returns a logFn that writes to the named tunnel's buffer and
 // (when -v is set) also to stdout. This is what every connection-scoped
-// log call should go through.
+// log call should go through — via the leveled helpers (infof, debugf, …),
+// which drop messages below the active level before they get here.
 func (m *tunnelManager) loggerFor(name string) logFn {
 	buf := m.bufferFor(name)
 	return func(format string, args ...any) {
@@ -92,7 +93,7 @@ func (m *tunnelManager) openInternal(d Desc, isAutoReconnect bool) error {
 		m.mu.Lock()
 		delete(m.running, d.Name)
 		m.mu.Unlock()
-		tlog("[%s] tunnel removed from manager", d.Name)
+		tlog.infof("[%s] tunnel removed from manager", d.Name)
 
 		if !t.UserClosed() && d.AutoReconnect {
 			m.scheduleReconnect(d)
@@ -142,19 +143,19 @@ func (m *tunnelManager) scheduleReconnect(d Desc) {
 			}
 			m.mu.Unlock()
 		}()
-		tlog("[%s] auto-reconnect: retrying in %s", d.Name, reconnectDelay)
+		tlog.infof("[%s] auto-reconnect: retrying in %s", d.Name, reconnectDelay)
 		for {
 			select {
 			case <-cancel:
-				tlog("[%s] auto-reconnect: cancelled", d.Name)
+				tlog.infof("[%s] auto-reconnect: cancelled", d.Name)
 				return
 			case <-time.After(reconnectDelay):
 			}
 			if err := m.openInternal(d, true); err != nil {
-				tlog("[%s] auto-reconnect failed: %v (retrying in %s)", d.Name, err, reconnectDelay)
+				tlog.warnf("[%s] auto-reconnect failed: %v (retrying in %s)", d.Name, err, reconnectDelay)
 				continue
 			}
-			tlog("[%s] auto-reconnect: connected", d.Name)
+			tlog.infof("[%s] auto-reconnect: connected", d.Name)
 			return
 		}
 	}()
