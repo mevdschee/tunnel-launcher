@@ -34,6 +34,10 @@ const (
 	// drag the window any smaller.
 	WindowWidth  = 600
 	WindowHeight = 600
+	// How long the log window waits after a redraw before it takes the next
+	// update. A forwarding tunnel can log thousands of lines a second and
+	// every redraw re-lays out the whole buffer, so the bursts are coalesced.
+	logWindowRedraw = 100 * time.Millisecond
 )
 
 func init() {
@@ -482,7 +486,7 @@ func runGUI() {
 				modTime = stat.ModTime()
 				size = stat.Size()
 			}
-			
+
 			if modTime != lastConfigModTime || size != lastConfigSize || lastConfigModTime.IsZero() {
 				lastConfigModTime = modTime
 				lastConfigSize = size
@@ -495,14 +499,22 @@ func runGUI() {
 				}
 			}
 		}
-		
+
 		snap := mgr.snapshot()
 		st.setRunning(snap)
-		
+
 		if k := runKey(snap); k != lastRunKey {
 			lastRunKey = k
 			needsRefresh = true
 			rebuildTray()
+		}
+
+		// An open tunnel shows a live uptime, so its row needs redrawing on
+		// every tick even when neither the config nor the set of running
+		// tunnels changed. Without this the uptime stays at the value it had
+		// the moment the tunnel opened, i.e. 00m00s.
+		if anyOpen(snap) {
+			needsRefresh = true
 		}
 
 		if needsRefresh {
@@ -661,19 +673,50 @@ func showLogWindow(a fyne.App, buf *logBuffer, name string) {
 	entry.Wrapping = fyne.TextWrapOff
 	entry.SetText(render())
 
+	// Clearing the buffer fires onAdd, which repaints the entry, so the
+	// button doesn't touch the widget itself.
 	clearBtn := widget.NewButtonWithIcon("Clear", theme.DeleteIcon(), func() {
 		buf.Clear()
-		entry.SetText("")
 	})
-	closeBtn := widget.NewButton("Close", func() {
-		buf.SetOnAdd(nil)
-		w.Close()
-	})
+	closeBtn := widget.NewButton("Close", func() { w.Close() })
 
+	// One goroutine owns the entry; tunnel goroutines only signal that the
+	// buffer changed. They used to call SetText themselves, so an open tunnel
+	// had its accept, forward and keep-alive goroutines writing the widget at
+	// the same time, which corrupts its internal state and takes the process
+	// down with it - silently, since a -H=windowsgui build has nowhere to
+	// print the panic.
+	changed := make(chan struct{}, 1)
+	done := make(chan struct{})
 	buf.SetOnAdd(func() {
-		entry.SetText(render())
+		select {
+		case changed <- struct{}{}:
+		default: // an update is already pending; it will pick this line up
+		}
 	})
-	w.SetOnClosed(func() { buf.SetOnAdd(nil) })
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			case <-changed:
+				entry.SetText(render())
+			}
+			select {
+			case <-done:
+				return
+			case <-time.After(logWindowRedraw):
+			}
+		}
+	}()
+
+	var stop sync.Once
+	w.SetOnClosed(func() {
+		stop.Do(func() {
+			buf.SetOnAdd(nil)
+			close(done)
+		})
+	})
 
 	bar := container.NewHBox(clearBtn, closeBtn)
 	w.SetContent(container.NewBorder(nil, bar, nil, nil, container.NewScroll(entry)))
@@ -846,6 +889,17 @@ func (s *state) appFor(name string) (string, bool) {
 
 func displayName(t *Desc) string {
 	return t.Name
+}
+
+// anyOpen reports whether any tunnel in snap is connected. An open tunnel
+// shows a ticking uptime, so its row has to be redrawn on every refresh.
+func anyOpen(snap map[string]Desc) bool {
+	for _, d := range snap {
+		if d.Status == StatusOpen {
+			return true
+		}
+	}
+	return false
 }
 
 func statusGlyph(t *Desc) string {
