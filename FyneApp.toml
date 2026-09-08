@@ -4,5 +4,5 @@ Website = "https://github.com/tqdev/tunnel-launcher"
 Icon = "icon.png"
 Name = "tunnel-launcher"
 ID = "com.tqdev.tunnel-launcher"
-Version = "0.1.4"
-Build = 25
+Version = "0.1.5"
+Build = 31
