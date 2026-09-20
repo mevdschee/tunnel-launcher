@@ -122,6 +122,16 @@ Now run the package.sh script to build all binaries (Docker required):
 ./package.sh   # produces fyne-cross/dist/tunnel-launcher-{amd64,arm64}.{tar.xz,exe.zip,app.zip}
 ```
 
+### Windows OpenGL
+
+Fyne draws through OpenGL 2, but Windows itself only ships the GDI generic
+OpenGL 1.1 implementation, so on a machine without working graphics drivers the
+window and the tray never come up. Installing the GPU driver fixes it. Where
+that is not an option, such as over RDP or in a virtual machine, install
+[Mesa3D for Windows](https://github.com/pal1000/mesa-dist-win), which replaces
+`opengl32.dll` with a software renderer either system wide or next to the exe.
+Tested with Mesa 26.0.6 on Windows 11.
+
 ### macOS build
 
 Cross compiling to macOS needs a copy of the macOS SDK, which fyne-cross does
