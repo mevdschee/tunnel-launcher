@@ -151,15 +151,13 @@ EOF
 Then build the app bundles:
 
 ```sh
-~/go/bin/fyne-cross darwin -arch=amd64,arm64 -tags=no_animations \
+~/go/bin/fyne-cross darwin -arch=amd64,arm64 \
   -app-id com.tqdev.tunnel-launcher \
   -macosx-sdk-path ~/SDKs/MacOSX12.3.sdk -image fyne-cross-darwin-sdk
 ```
 
 The first run pulls the darwin container image, which is a few gigabytes. Unlike
-the linux and windows targets, `-app-id` is required. The `gles` tag the other
-targets use is left off because fyne ignores it on darwin and always takes the
-desktop GL path there.
+the linux and windows targets, `-app-id` is required.
 
 The package.sh script builds the image, runs this for both architectures and
 zips the resulting app bundles. It expects the SDK in the location above,
