@@ -5,4 +5,4 @@ Icon = "icon.png"
 Name = "tunnel-launcher"
 ID = "com.tqdev.tunnel-launcher"
 Version = "0.1.7"
-Build = 41
+Build = 47
