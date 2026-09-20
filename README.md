@@ -119,7 +119,60 @@ go install github.com/fyne-io/fyne-cross@latest
 Now run the package.sh script to build all binaries (Docker required):
 
 ```sh
-./package.sh   # produces fyne-cross/dist/tunnel-launcher-{amd64,arm64}.{tar.xz,exe.zip}
+./package.sh   # produces fyne-cross/dist/tunnel-launcher-{amd64,arm64}.{tar.xz,exe.zip,app.zip}
 ```
+
+### macOS build
+
+Cross compiling to macOS needs a copy of the macOS SDK, which fyne-cross does
+not ship. Use 12.3 or newer, because the Go standard library links against
+`SecTrustCopyCertificateChain`, which was added in macOS 12.
+
+Download the SDK:
+
+```sh
+mkdir -p ~/SDKs && cd ~/SDKs
+curl -LO https://github.com/joseluisq/macosx-sdks/releases/download/12.3/MacOSX12.3.sdk.tar.xz
+tar xf MacOSX12.3.sdk.tar.xz
+```
+
+fyne-cross 1.6.3 mounts the SDK at /sdk and tells zig to link against
+`-F/System/Library/Frameworks`, but zig only applies the sysroot to `-L`, not to
+`-F`, so every framework fails to resolve. Build a darwin image that has the
+path symlinked into the mounted SDK:
+
+```sh
+docker build -t fyne-cross-darwin-sdk - <<EOF
+FROM fyneio/fyne-cross-images:darwin
+RUN mkdir -p /System/Library && ln -s /sdk/System/Library/Frameworks /System/Library/Frameworks
+EOF
+```
+
+Then build the app bundles:
+
+```sh
+~/go/bin/fyne-cross darwin -arch=amd64,arm64 -tags=no_animations \
+  -app-id com.tqdev.tunnel-launcher \
+  -macosx-sdk-path ~/SDKs/MacOSX12.3.sdk -image fyne-cross-darwin-sdk
+```
+
+The first run pulls the darwin container image, which is a few gigabytes. Unlike
+the linux and windows targets, `-app-id` is required. The `gles` tag the other
+targets use is left off because fyne ignores it on darwin and always takes the
+desktop GL path there.
+
+The package.sh script builds the image, runs this for both architectures and
+zips the resulting app bundles. It expects the SDK in the location above,
+override it with the `MACOSX_SDK` environment variable.
+
+The resulting app is unsigned, so macOS refuses to open it on first launch. Use
+the Open entry in the right click menu, or drop the quarantine flag with
+`xattr -dr com.apple.quarantine tunnel-launcher.app`.
+
+macOS has no accelerated OpenGL renderer in a virtual machine, and glfw always
+asks for one, so the tray and the window would fail to come up with "NSGL:
+Failed to find a suitable pixel format". `third_party/glfw` carries a patched
+copy of glfw that retries with Apple's CPU renderer when that happens, wired up
+through a `replace` in go.mod. See third_party/README.md for the details.
 
 Enjoy!
